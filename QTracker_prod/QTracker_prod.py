@@ -5,6 +5,10 @@ import argparse
 import os
 from ROOT import TFile, TTree, TMatrixD
 from numba import njit, prange
+import re
+import glob
+
+
 
 # USE_CHI2 must be False the first time the script is ran to obtain output for training the quality metric
 USE_CHI2 = False
@@ -13,13 +17,45 @@ USE_SMAXMATRIX = False  # Toggle to enable/disable write softmax matrix
 
 # Paths to models
 MODEL_PATH_TRACK = "./models/track_finder.h5"
-MODEL_PATH_MOMENTUM_MUP = "./models/mom_mup.h5"
-MODEL_PATH_MOMENTUM_MUM = "./models/mom_mum.h5"
+MODEL_PATH_MOMENTUM_MUP = None #"./models/mom_mup.h5"
+MODEL_PATH_MOMENTUM_MUM = None #"./models/mom_mum.h5"
 MODEL_PATH_METRIC = "./models/chi2_predictor_model.h5"
 
 # Number of detectors and element IDs
 NUM_DETECTORS = 62
 NUM_ELEMENT_IDS = 201
+
+def get_latest_momentum_models():
+    # Look for all mom_model_mup_*.h5 and mom_model_mum_*.h5 files
+    model_paths = glob.glob("models/MOMENTA/mom_model_*_*.h5")
+
+    if not model_paths:
+        print("No momentum models found.")
+        return None, None
+
+    # Extract the ith_Model number
+    model_dict = {}
+    for path in model_paths:
+        match = re.search(r'mom_model_(mup|mum)_(\d+)\.h5$', path)
+        if match:
+            tag = match.group(1)
+            ith_model = int(match.group(2))
+            if ith_model not in model_dict:
+                model_dict[ith_model] = {}
+            model_dict[ith_model][tag] = path
+
+    if not model_dict:
+        print("No valid mup/mum models found.")
+        return None, None
+
+    # Find the highest ith_Model that has both mup and mum
+    for ith_model in sorted(model_dict.keys(), reverse=True):
+        if 'mup' in model_dict[ith_model] and 'mum' in model_dict[ith_model]:
+            return model_dict[ith_model]['mup'], model_dict[ith_model]['mum']
+
+    print("No matching mup and mum model pairs found.")
+    return None, None
+
 
 def custom_loss(y_true, y_pred):
     # Need to load custom loss so track finder model works
@@ -496,8 +532,8 @@ def process_data(root_file, output_file="tracker_output.root", use_chi2_model=US
     with tf.keras.utils.custom_object_scope({"custom_loss": custom_loss, "Adam": tf.keras.optimizers.legacy.Adam}):
         model_track = tf.keras.models.load_model(MODEL_PATH_TRACK)
 
-    model_momentum_mup = tf.keras.models.load_model(MODEL_PATH_MOMENTUM_MUP)
-    model_momentum_mum = tf.keras.models.load_model(MODEL_PATH_MOMENTUM_MUM)
+    model_momentum_mup = tf.keras.models.load_model(MODEL_PATH_MOMENTUM_MUP, compile=False)
+    model_momentum_mum = tf.keras.models.load_model(MODEL_PATH_MOMENTUM_MUM, compile=False)
 
     #X, event_entries, _ = load_data(root_file)
     #detectorIDs, elementIDs, driftDistances, _ = load_detector_element_data(root_file)
@@ -578,4 +614,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_file", type=str, default="qtracker_reco.root", help="Output ROOT file.")
     args = parser.parse_args()
     
+
+    MODEL_PATH_MOMENTUM_MUP, MODEL_PATH_MOMENTUM_MUM = get_latest_momentum_models()
+
     process_data(args.root_file, args.output_file)
